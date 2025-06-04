@@ -26,7 +26,7 @@ def trend():
         if len(keywords) <= 4:
             return get_simple_trends(keywords, timeframe, frequency, geo)
         
-        # 5個以上の場合のスケーリング処理（429エラー対策強化）
+        # 5個以上の場合のスケーリング処理
         return get_scaled_trends(keywords, timeframe, frequency, geo)
         
     except Exception as e:
@@ -38,18 +38,38 @@ def trend():
         else:
             return jsonify({"error": f"Unexpected error: {error_msg}"}), 500
 
+def create_pytrends_instance():
+    """pytrendsインスタンスを安全に作成"""
+    try:
+        # method_whitelist エラー対策：retries パラメータを削除
+        pytrends = TrendReq(hl="ja-JP", tz=540)
+        return pytrends
+    except Exception as e:
+        print(f"Pytrends instance creation error: {e}")
+        # フォールバック：最小限のパラメータで作成
+        return TrendReq()
+
 def get_simple_trends(keywords, timeframe, frequency, geo):
     """4個以下のキーワード用シンプル処理"""
     try:
-        # ランダム遅延追加（429エラー対策）
+        # ランダム遅延追加
         time.sleep(random.uniform(1, 3))
         
-        pytrends = TrendReq(hl="ja-JP", tz=540, retries=2, backoff_factor=0.1)
+        pytrends = create_pytrends_instance()
         
-        if geo:
-            pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
-        else:
-            pytrends.build_payload(keywords, timeframe=timeframe)
+        # build_payload を安全に実行
+        try:
+            if geo:
+                pytrends.build_payload(keywords, timeframe=timeframe, geo=geo, gprop='')
+            else:
+                pytrends.build_payload(keywords, timeframe=timeframe, gprop='')
+        except Exception as e:
+            print(f"Build payload error: {e}")
+            # フォールバック：gpropパラメータを削除
+            if geo:
+                pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
+            else:
+                pytrends.build_payload(keywords, timeframe=timeframe)
         
         df = pytrends.interest_over_time()
         
@@ -68,8 +88,11 @@ def get_simple_trends(keywords, timeframe, frequency, geo):
         
         # データフレーム整理
         df = df.reset_index()
-        if 'date' not in df.columns and df.columns[0] in ['index', 'Date']:
-            df = df.rename(columns={df.columns[0]: 'date'})
+        
+        # 日付列の名前を統一
+        date_columns = [col for col in df.columns if 'date' in col.lower() or col == 'index']
+        if date_columns:
+            df = df.rename(columns={date_columns[0]: 'date'})
         
         # 日付フォーマット統一
         if 'date' in df.columns:
@@ -78,10 +101,11 @@ def get_simple_trends(keywords, timeframe, frequency, geo):
         return jsonify({"data": df.fillna(0).to_dict(orient="records")})
         
     except Exception as e:
+        print(f"Simple trends error: {e}")
         return jsonify({"error": f"Simple trends error: {str(e)}"}), 500
 
 def get_scaled_trends(keywords, timeframe, frequency, geo):
-    """5個以上のキーワード用スケーリング処理（429エラー対策強化）"""
+    """5個以上のキーワード用スケーリング処理"""
     try:
         pivot = keywords[0]
         
@@ -89,21 +113,22 @@ def get_scaled_trends(keywords, timeframe, frequency, geo):
         group1 = keywords[:4]  # 最初の4個
         group2 = [pivot] + keywords[4:]  # 共通キーワード + 残り
         
-        # グループ1のデータ取得
         print(f"Group 1: {group1}")
-        df1 = fetch_trends_with_retry(group1, timeframe, geo, retry_count=3)
+        print(f"Group 2: {group2}")
+        
+        # グループ1のデータ取得
+        df1 = fetch_trends_with_retry(group1, timeframe, geo, retry_count=2)
         
         if df1.empty:
             return jsonify({"error": "No data available for group 1"}), 404
         
-        # 長い待機時間（429エラー対策）
-        wait_time = random.uniform(45, 75)  # 45-75秒のランダム待機
+        # 長い待機時間
+        wait_time = random.uniform(60, 90)  # 1-1.5分待機
         print(f"Waiting {wait_time:.1f} seconds before second request...")
         time.sleep(wait_time)
         
         # グループ2のデータ取得
-        print(f"Group 2: {group2}")
-        df2 = fetch_trends_with_retry(group2, timeframe, geo, retry_count=3)
+        df2 = fetch_trends_with_retry(group2, timeframe, geo, retry_count=2)
         
         if df2.empty:
             return jsonify({"error": "No data available for group 2"}), 404
@@ -119,8 +144,11 @@ def get_scaled_trends(keywords, timeframe, frequency, geo):
         
         # データフレーム整理
         df_final = df_final.reset_index()
-        if 'date' not in df_final.columns and df_final.columns[0] in ['index', 'Date']:
-            df_final = df_final.rename(columns={df_final.columns[0]: 'date'})
+        
+        # 日付列の名前を統一
+        date_columns = [col for col in df_final.columns if 'date' in col.lower() or col == 'index']
+        if date_columns:
+            df_final = df_final.rename(columns={date_columns[0]: 'date'})
         
         # 日付フォーマット統一
         if 'date' in df_final.columns:
@@ -129,24 +157,33 @@ def get_scaled_trends(keywords, timeframe, frequency, geo):
         return jsonify({"data": df_final.fillna(0).to_dict(orient="records")})
         
     except Exception as e:
+        print(f"Scaled trends error: {e}")
         return jsonify({"error": f"Scaled trends error: {str(e)}"}), 500
 
-def fetch_trends_with_retry(keywords, timeframe, geo, retry_count=3):
-    """リトライ機能付きトレンド取得"""
+def fetch_trends_with_retry(keywords, timeframe, geo, retry_count=2):
+    """リトライ機能付きトレンド取得（簡素化版）"""
     for attempt in range(retry_count):
         try:
-            # 初回以外は長い待機
             if attempt > 0:
-                wait_time = random.uniform(60, 120)  # 1-2分待機
+                wait_time = random.uniform(30, 60)
                 print(f"Retry attempt {attempt + 1}, waiting {wait_time:.1f} seconds...")
                 time.sleep(wait_time)
             
-            pytrends = TrendReq(hl="ja-JP", tz=540, retries=1, backoff_factor=0.5)
+            pytrends = create_pytrends_instance()
             
-            if geo:
-                pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
-            else:
-                pytrends.build_payload(keywords, timeframe=timeframe)
+            # build_payload を安全に実行
+            try:
+                if geo:
+                    pytrends.build_payload(keywords, timeframe=timeframe, geo=geo, gprop='')
+                else:
+                    pytrends.build_payload(keywords, timeframe=timeframe, gprop='')
+            except Exception as e:
+                print(f"Build payload error (attempt {attempt + 1}): {e}")
+                # フォールバック
+                if geo:
+                    pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
+                else:
+                    pytrends.build_payload(keywords, timeframe=timeframe)
             
             df = pytrends.interest_over_time()
             
@@ -163,11 +200,15 @@ def fetch_trends_with_retry(keywords, timeframe, geo, retry_count=3):
             print(f"Attempt {attempt + 1} failed: {error_msg}")
             
             if "429" in error_msg or "Too Many Requests" in error_msg:
-                if attempt == retry_count - 1:  # 最後の試行
+                if attempt == retry_count - 1:
                     raise Exception("Rate limit exceeded after all retries")
                 continue
+            elif "method_whitelist" in error_msg:
+                print("method_whitelist error detected, retrying with different approach")
+                continue
             else:
-                raise e
+                if attempt == retry_count - 1:
+                    raise e
     
     raise Exception("Failed to fetch data after all retries")
 
