@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from pytrends.request import TrendReq
 import pandas as pd
 import time
+import random
 
 app = Flask(__name__)
 
@@ -15,124 +16,18 @@ def trend():
         data = request.json
         keywords = data.get("keywords", [])
         timeframe = data.get("timeframe", "today 12-m")
-        frequency = data.get("frequency", "weekly")  # 新規追加
-        geo = data.get("geo", "")  # 新規追加（空文字列は全世界）
+        frequency = data.get("frequency", "weekly")
+        geo = data.get("geo", "")
         
         if not keywords or len(keywords) < 2:
             return jsonify({"error": "At least 2 keywords required"}), 400
         
         # キーワードが5個以下の場合は単純処理
         if len(keywords) <= 5:
-            pytrends = TrendReq(hl="ja-JP", tz=540)
-            
-            # geo パラメータを追加
-            if geo:
-                pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
-            else:
-                pytrends.build_payload(keywords, timeframe=timeframe)
-            
-            df = pytrends.interest_over_time()
-            
-            if df.empty:
-                return jsonify({"error": "No data available"}), 404
-            
-            # isPartial列のみ削除
-            if 'isPartial' in df.columns:
-                df = df.drop(columns=['isPartial'])
-            
-            # frequency対応（修正版）
-            if frequency == "daily":
-                df = interpolate_to_daily(df)
-            elif frequency == "monthly":
-                df = aggregate_to_monthly(df)
-            # weeklyの場合はそのまま
-            
-            # インデックスをリセットしてdate列を作成
-            df = df.reset_index()
-            
-            # date列を文字列形式に変換
-            if 'date' in df.columns:
-                df['date'] = df['date'].dt.strftime('%Y-%m-%d')
-            
-            return jsonify({"data": df.fillna(0).to_dict(orient="records")})
+            return get_simple_trends(keywords, timeframe, frequency, geo)
         
-        # 6個以上の場合のスケーリング処理
-        pivot = keywords[0]
-        group1 = keywords[:5]
-        group2 = [pivot] + keywords[5:]
-        
-        pytrends = TrendReq(hl="ja-JP", tz=540)
-        
-        # グループ1のデータ取得
-        if geo:
-            pytrends.build_payload(group1, timeframe=timeframe, geo=geo)
-        else:
-            pytrends.build_payload(group1, timeframe=timeframe)
-        
-        df1 = pytrends.interest_over_time()
-        
-        if df1.empty:
-            return jsonify({"error": "No data available for group 1"}), 404
-        
-        # 待機（429エラー対策）
-        time.sleep(30)  # 15秒から30秒に延長
-        
-        # グループ2のデータ取得
-        if geo:
-            pytrends.build_payload(group2, timeframe=timeframe, geo=geo)
-        else:
-            pytrends.build_payload(group2, timeframe=timeframe)
-        
-        df2 = pytrends.interest_over_time()
-        
-        if df2.empty:
-            return jsonify({"error": "No data available for group 2"}), 404
-        
-        # スケーリング処理（改良版）
-        pivot_mean1 = df1[pivot].mean()
-        pivot_mean2 = df2[pivot].mean()
-        
-        # ゼロ除算防止
-        if pivot_mean2 == 0:
-            return jsonify({"error": "Cannot scale: pivot mean is zero in group 2"}), 400
-        
-        scale_factor = pivot_mean1 / pivot_mean2
-        
-        # group2のpivot以外の列をスケーリング
-        df2_scaled = df2.copy()
-        for col in df2.columns:
-            if col not in [pivot, 'isPartial']:
-                df2_scaled[col] = df2[col] * scale_factor
-        
-        # データ統合（pivotキーワードはgroup1のデータを使用）
-        final_columns = {}
-        
-        # group1のデータを追加（isPartial除く）
-        for col in df1.columns:
-            if col != 'isPartial':
-                final_columns[col] = df1[col]
-        
-        # group2のスケーリング済みデータを追加（pivotとisPartial除く）
-        for col in df2_scaled.columns:
-            if col not in [pivot, 'isPartial']:
-                final_columns[col] = df2_scaled[col]
-        
-        df_final = pd.DataFrame(final_columns, index=df1.index)
-        
-        # frequency対応
-        if frequency == "daily":
-            df_final = interpolate_to_daily(df_final)
-        elif frequency == "monthly":
-            df_final = aggregate_to_monthly(df_final)
-        
-        # インデックスをリセットしてdate列を作成
-        df_final = df_final.reset_index()
-        
-        # date列を文字列形式に変換
-        if 'date' in df_final.columns:
-            df_final['date'] = df_final['date'].dt.strftime('%Y-%m-%d')
-        
-        return jsonify({"data": df_final.fillna(0).to_dict(orient="records")})
+        # 6個以上の場合のスケーリング処理（429エラー対策強化）
+        return get_scaled_trends(keywords, timeframe, frequency, geo)
         
     except Exception as e:
         error_msg = str(e)
@@ -143,28 +38,184 @@ def trend():
         else:
             return jsonify({"error": f"Unexpected error: {error_msg}"}), 500
 
+def get_simple_trends(keywords, timeframe, frequency, geo):
+    """5個以下のキーワード用シンプル処理"""
+    try:
+        # ランダム遅延追加（429エラー対策）
+        time.sleep(random.uniform(1, 3))
+        
+        pytrends = TrendReq(hl="ja-JP", tz=540, retries=2, backoff_factor=0.1)
+        
+        if geo:
+            pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
+        else:
+            pytrends.build_payload(keywords, timeframe=timeframe)
+        
+        df = pytrends.interest_over_time()
+        
+        if df.empty:
+            return jsonify({"error": "No data available"}), 404
+        
+        # isPartial列削除
+        if 'isPartial' in df.columns:
+            df = df.drop(columns=['isPartial'])
+        
+        # frequency対応
+        if frequency == "daily":
+            df = interpolate_to_daily(df)
+        elif frequency == "monthly":
+            df = aggregate_to_monthly(df)
+        
+        # データフレーム整理
+        df = df.reset_index()
+        if 'date' not in df.columns and df.columns[0] in ['index', 'Date']:
+            df = df.rename(columns={df.columns[0]: 'date'})
+        
+        # 日付フォーマット統一
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+        
+        return jsonify({"data": df.fillna(0).to_dict(orient="records")})
+        
+    except Exception as e:
+        return jsonify({"error": f"Simple trends error: {str(e)}"}), 500
+
+def get_scaled_trends(keywords, timeframe, frequency, geo):
+    """6個以上のキーワード用スケーリング処理（429エラー対策強化）"""
+    try:
+        pivot = keywords[0]
+        group1 = keywords[:5]
+        group2 = [pivot] + keywords[5:]
+        
+        # グループ1のデータ取得
+        print(f"Group 1: {group1}")
+        df1 = fetch_trends_with_retry(group1, timeframe, geo, retry_count=3)
+        
+        if df1.empty:
+            return jsonify({"error": "No data available for group 1"}), 404
+        
+        # 長い待機時間（429エラー対策）
+        wait_time = random.uniform(45, 75)  # 45-75秒のランダム待機
+        print(f"Waiting {wait_time:.1f} seconds before second request...")
+        time.sleep(wait_time)
+        
+        # グループ2のデータ取得
+        print(f"Group 2: {group2}")
+        df2 = fetch_trends_with_retry(group2, timeframe, geo, retry_count=3)
+        
+        if df2.empty:
+            return jsonify({"error": "No data available for group 2"}), 404
+        
+        # スケーリング処理
+        df_final = scale_and_merge_data(df1, df2, pivot)
+        
+        # frequency対応
+        if frequency == "daily":
+            df_final = interpolate_to_daily(df_final)
+        elif frequency == "monthly":
+            df_final = aggregate_to_monthly(df_final)
+        
+        # データフレーム整理
+        df_final = df_final.reset_index()
+        if 'date' not in df_final.columns and df_final.columns[0] in ['index', 'Date']:
+            df_final = df_final.rename(columns={df_final.columns[0]: 'date'})
+        
+        # 日付フォーマット統一
+        if 'date' in df_final.columns:
+            df_final['date'] = pd.to_datetime(df_final['date']).dt.strftime('%Y-%m-%d')
+        
+        return jsonify({"data": df_final.fillna(0).to_dict(orient="records")})
+        
+    except Exception as e:
+        return jsonify({"error": f"Scaled trends error: {str(e)}"}), 500
+
+def fetch_trends_with_retry(keywords, timeframe, geo, retry_count=3):
+    """リトライ機能付きトレンド取得"""
+    for attempt in range(retry_count):
+        try:
+            # 初回以外は長い待機
+            if attempt > 0:
+                wait_time = random.uniform(60, 120)  # 1-2分待機
+                print(f"Retry attempt {attempt + 1}, waiting {wait_time:.1f} seconds...")
+                time.sleep(wait_time)
+            
+            pytrends = TrendReq(hl="ja-JP", tz=540, retries=1, backoff_factor=0.5)
+            
+            if geo:
+                pytrends.build_payload(keywords, timeframe=timeframe, geo=geo)
+            else:
+                pytrends.build_payload(keywords, timeframe=timeframe)
+            
+            df = pytrends.interest_over_time()
+            
+            if not df.empty:
+                # isPartial列削除
+                if 'isPartial' in df.columns:
+                    df = df.drop(columns=['isPartial'])
+                return df
+            else:
+                print(f"Empty data on attempt {attempt + 1}")
+                
+        except Exception as e:
+            error_msg = str(e)
+            print(f"Attempt {attempt + 1} failed: {error_msg}")
+            
+            if "429" in error_msg or "Too Many Requests" in error_msg:
+                if attempt == retry_count - 1:  # 最後の試行
+                    raise Exception("Rate limit exceeded after all retries")
+                continue
+            else:
+                raise e
+    
+    raise Exception("Failed to fetch data after all retries")
+
+def scale_and_merge_data(df1, df2, pivot):
+    """データスケーリングとマージ"""
+    pivot_mean1 = df1[pivot].mean()
+    pivot_mean2 = df2[pivot].mean()
+    
+    if pivot_mean2 == 0:
+        raise Exception("Cannot scale: pivot mean is zero in group 2")
+    
+    scale_factor = pivot_mean1 / pivot_mean2
+    print(f"Scale factor: {scale_factor:.3f} (Group1 mean: {pivot_mean1:.1f}, Group2 mean: {pivot_mean2:.1f})")
+    
+    # group2のpivot以外をスケーリング
+    df2_scaled = df2.copy()
+    for col in df2.columns:
+        if col != pivot:
+            df2_scaled[col] = df2[col] * scale_factor
+    
+    # データ統合
+    final_columns = {}
+    
+    # group1のデータを追加
+    for col in df1.columns:
+        final_columns[col] = df1[col]
+    
+    # group2のスケーリング済みデータを追加（pivot除く）
+    for col in df2_scaled.columns:
+        if col != pivot:
+            final_columns[col] = df2_scaled[col]
+    
+    df_final = pd.DataFrame(final_columns, index=df1.index)
+    return df_final
+
 def interpolate_to_daily(df):
-    """週次データを日次に線形補間（修正版）"""
+    """週次データを日次に線形補間"""
     if df.empty:
         return df
     
     try:
-        # インデックスが日付であることを確認
         if not isinstance(df.index, pd.DatetimeIndex):
             return df
         
-        # 開始日と終了日を取得
         start_date = df.index[0]
         end_date = df.index[-1]
-        
-        # 日次の日付範囲を作成
         daily_index = pd.date_range(start=start_date, end=end_date, freq='D')
         
-        # 元データを日次インデックスでリサンプルし、線形補間
         df_reindexed = df.reindex(df.index.union(daily_index))
         df_interpolated = df_reindexed.interpolate(method='linear')
-        
-        # 日次データのみを抽出
         df_daily = df_interpolated.reindex(daily_index)
         
         return df_daily
@@ -174,19 +225,15 @@ def interpolate_to_daily(df):
         return df
 
 def aggregate_to_monthly(df):
-    """週次データを月次に集約（修正版）"""
+    """週次データを月次に集約"""
     if df.empty:
         return df
     
     try:
-        # インデックスが日付であることを確認
         if not isinstance(df.index, pd.DatetimeIndex):
             return df
         
-        # 月次で集約（平均値）
         df_monthly = df.resample('M').mean()
-        
-        # 月初の日付に変更
         df_monthly.index = df_monthly.index.to_period('M').to_timestamp()
         
         return df_monthly
