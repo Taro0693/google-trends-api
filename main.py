@@ -40,13 +40,20 @@ def trend():
             if 'isPartial' in df.columns:
                 df = df.drop(columns=['isPartial'])
             
-            # frequency対応（日次の場合は補間処理）
+            # frequency対応（修正版）
             if frequency == "daily":
                 df = interpolate_to_daily(df)
             elif frequency == "monthly":
                 df = aggregate_to_monthly(df)
+            # weeklyの場合はそのまま
             
-            df.reset_index(inplace=True)
+            # インデックスをリセットしてdate列を作成
+            df = df.reset_index()
+            
+            # date列を文字列形式に変換
+            if 'date' in df.columns:
+                df['date'] = df['date'].dt.strftime('%Y-%m-%d')
+            
             return jsonify({"data": df.fillna(0).to_dict(orient="records")})
         
         # 6個以上の場合のスケーリング処理
@@ -118,7 +125,12 @@ def trend():
         elif frequency == "monthly":
             df_final = aggregate_to_monthly(df_final)
         
-        df_final.reset_index(inplace=True)
+        # インデックスをリセットしてdate列を作成
+        df_final = df_final.reset_index()
+        
+        # date列を文字列形式に変換
+        if 'date' in df_final.columns:
+            df_final['date'] = df_final['date'].dt.strftime('%Y-%m-%d')
         
         return jsonify({"data": df_final.fillna(0).to_dict(orient="records")})
         
@@ -132,40 +144,56 @@ def trend():
             return jsonify({"error": f"Unexpected error: {error_msg}"}), 500
 
 def interpolate_to_daily(df):
-    """週次データを日次に線形補間"""
+    """週次データを日次に線形補間（修正版）"""
     if df.empty:
         return df
     
-    # インデックスが日付であることを確認
-    if not isinstance(df.index, pd.DatetimeIndex):
+    try:
+        # インデックスが日付であることを確認
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return df
+        
+        # 開始日と終了日を取得
+        start_date = df.index[0]
+        end_date = df.index[-1]
+        
+        # 日次の日付範囲を作成
+        daily_index = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # 元データを日次インデックスでリサンプルし、線形補間
+        df_reindexed = df.reindex(df.index.union(daily_index))
+        df_interpolated = df_reindexed.interpolate(method='linear')
+        
+        # 日次データのみを抽出
+        df_daily = df_interpolated.reindex(daily_index)
+        
+        return df_daily
+        
+    except Exception as e:
+        print(f"Daily interpolation error: {e}")
         return df
-    
-    # 日次インデックスを作成
-    start_date = df.index[0]
-    end_date = df.index[-1]
-    daily_index = pd.date_range(start=start_date, end=end_date, freq='D')
-    
-    # 線形補間でリサンプリング
-    df_daily = df.reindex(daily_index).interpolate(method='linear')
-    
-    return df_daily
 
 def aggregate_to_monthly(df):
-    """週次データを月次に集約"""
+    """週次データを月次に集約（修正版）"""
     if df.empty:
         return df
     
-    # インデックスが日付であることを確認
-    if not isinstance(df.index, pd.DatetimeIndex):
+    try:
+        # インデックスが日付であることを確認
+        if not isinstance(df.index, pd.DatetimeIndex):
+            return df
+        
+        # 月次で集約（平均値）
+        df_monthly = df.resample('M').mean()
+        
+        # 月初の日付に変更
+        df_monthly.index = df_monthly.index.to_period('M').to_timestamp()
+        
+        return df_monthly
+        
+    except Exception as e:
+        print(f"Monthly aggregation error: {e}")
         return df
-    
-    # 月次で集約（平均値）
-    df_monthly = df.resample('M').mean()
-    
-    # 月初の日付に変更
-    df_monthly.index = df_monthly.index.to_period('M').to_timestamp()
-    
-    return df_monthly
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
