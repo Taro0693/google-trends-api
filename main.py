@@ -22,11 +22,11 @@ def trend():
         if not keywords or len(keywords) < 2:
             return jsonify({"error": "At least 2 keywords required"}), 400
         
-        # キーワードが5個以下の場合は単純処理
-        if len(keywords) <= 5:
+        # キーワードが4個以下の場合は単純処理
+        if len(keywords) <= 4:
             return get_simple_trends(keywords, timeframe, frequency, geo)
         
-        # 6個以上の場合のスケーリング処理（429エラー対策強化）
+        # 5個以上の場合のスケーリング処理（429エラー対策強化）
         return get_scaled_trends(keywords, timeframe, frequency, geo)
         
     except Exception as e:
@@ -39,7 +39,7 @@ def trend():
             return jsonify({"error": f"Unexpected error: {error_msg}"}), 500
 
 def get_simple_trends(keywords, timeframe, frequency, geo):
-    """5個以下のキーワード用シンプル処理"""
+    """4個以下のキーワード用シンプル処理"""
     try:
         # ランダム遅延追加（429エラー対策）
         time.sleep(random.uniform(1, 3))
@@ -81,11 +81,13 @@ def get_simple_trends(keywords, timeframe, frequency, geo):
         return jsonify({"error": f"Simple trends error: {str(e)}"}), 500
 
 def get_scaled_trends(keywords, timeframe, frequency, geo):
-    """6個以上のキーワード用スケーリング処理（429エラー対策強化）"""
+    """5個以上のキーワード用スケーリング処理（429エラー対策強化）"""
     try:
         pivot = keywords[0]
-        group1 = keywords[:5]
-        group2 = [pivot] + keywords[5:]
+        
+        # 4個ずつのグループに分割（共通キーワード含む）
+        group1 = keywords[:4]  # 最初の4個
+        group2 = [pivot] + keywords[4:]  # 共通キーワード + 残り
         
         # グループ1のデータ取得
         print(f"Group 1: {group1}")
