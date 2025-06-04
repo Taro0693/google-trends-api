@@ -52,8 +52,8 @@ def create_pytrends_instance():
 def get_simple_trends(keywords, timeframe, frequency, geo):
     """4個以下のキーワード用シンプル処理"""
     try:
-        # ランダム遅延追加
-        time.sleep(random.uniform(1, 3))
+        # ランダム遅延追加（Google Trends 429対策）
+        time.sleep(random.uniform(3, 8))
         
         pytrends = create_pytrends_instance()
         
@@ -122,8 +122,8 @@ def get_scaled_trends(keywords, timeframe, frequency, geo):
         if df1.empty:
             return jsonify({"error": "No data available for group 1"}), 404
         
-        # 長い待機時間
-        wait_time = random.uniform(60, 90)  # 1-1.5分待機
+        # 長い待機時間（Google Trends 429エラー対策）
+        wait_time = random.uniform(120, 180)  # 2-3分待機
         print(f"Waiting {wait_time:.1f} seconds before second request...")
         time.sleep(wait_time)
         
@@ -165,7 +165,7 @@ def fetch_trends_with_retry(keywords, timeframe, geo, retry_count=2):
     for attempt in range(retry_count):
         try:
             if attempt > 0:
-                wait_time = random.uniform(30, 60)
+                wait_time = random.uniform(90, 150)  # 1.5-2.5分待機
                 print(f"Retry attempt {attempt + 1}, waiting {wait_time:.1f} seconds...")
                 time.sleep(wait_time)
             
