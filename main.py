@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from pytrends.request import TrendReq
 import pandas as pd
+import time  # ← 追加
 
 app = Flask(__name__)
 
@@ -24,12 +25,19 @@ def trend():
         group2 = [pivot] + keywords[5:]
 
         pytrends = TrendReq(hl="ja-JP", tz=540)
+
+        # --- グループ1 ---
         pytrends.build_payload(group1, timeframe=timeframe)
         df1 = pytrends.interest_over_time()
 
+        # ✅ ここで待機を入れる（429対策）
+        time.sleep(15)
+
+        # --- グループ2 ---
         pytrends.build_payload(group2, timeframe=timeframe)
         df2 = pytrends.interest_over_time()
 
+        # --- スケーリング処理 ---
         scale = df1[pivot].mean() / df2[pivot].mean()
         df2_scaled = df2.copy()
         for col in df2.columns:
